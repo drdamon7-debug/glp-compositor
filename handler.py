@@ -1,5 +1,5 @@
 """
-GLP BodyGuard - RunPod Serverless Compositor (Layers 3+4 in one call)
+GLP BodyGuard — RunPod Serverless Compositor (Layers 3+4 in one call)
 Renders the branded transparent overlay (with this video's hook + caption) AND
 stitches Veo background + overlay + HeyGen voice into one 1080x1920 MP4.
 CPU-only; no GPU required.
@@ -16,19 +16,18 @@ from PIL import Image, ImageDraw, ImageFont
 
 W, H = 1080, 1920
 SAFE = 150
-TEAL = (22, 214, 198, 255)
+TEAL = (22, 214, 198, 255)        # #16D6C6
 TEAL_SOFT = (22, 214, 198, 90)
-OBSIDIAN = (11, 11, 11)
+OBSIDIAN = (11, 11, 11)           # #0B0B0B
 GLASS = (11, 11, 11, 150)
 FOOTER = (203, 209, 214, 255)
 WHITE = (245, 245, 245, 255)
-FOOTER_TEXT = (
-    "GLP BodyGuard is an educational self-tracking tool developed by "
-    "R3 Integrated Health Plus LLC. It is not a medical device, does not "
-    "diagnose or treat any condition, and does not provide medical advice."
-)
+FOOTER_TEXT = ("GLP BodyGuard is an educational self-tracking tool developed by "
+               "R3 Integrated Health Plus LLC. It is not a medical device, does not "
+               "diagnose or treat any condition, and does not provide medical advice.")
+
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-REG  = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
 def _download(url, path):
@@ -40,7 +39,7 @@ def _download(url, path):
                     f.write(c)
 
 
-def _wrap(draw, text, fnt, maxw):
+def wrap(draw, text, fnt, maxw):
     out = []
     for para in text.split("\n"):
         words, cur = para.split(), ""
@@ -56,16 +55,16 @@ def _wrap(draw, text, fnt, maxw):
     return out
 
 
-def _fit(draw, text, path, start, maxw, max_lines, min_size=40):
+def fit(draw, text, path, start, maxw, max_lines, min_size=40):
     size = start
     while size >= min_size:
         fnt = ImageFont.truetype(path, size)
-        lines = _wrap(draw, text, fnt, maxw)
+        lines = wrap(draw, text, fnt, maxw)
         if len(lines) <= max_lines:
             return fnt, lines
         size -= 4
     fnt = ImageFont.truetype(path, min_size)
-    return fnt, _wrap(draw, text, fnt, maxw)
+    return fnt, wrap(draw, text, fnt, maxw)
 
 
 def _corner(d, x, y, dx, dy, ln=46, th=4):
@@ -76,8 +75,9 @@ def _corner(d, x, y, dx, dy, ln=46, th=4):
 def build_overlay(hook, caption, path):
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
+
     m = 40
-    _corner(d, m, m, 1, 1);  _corner(d, W - m, m, -1, 1)
+    _corner(d, m, m, 1, 1); _corner(d, W - m, m, -1, 1)
     _corner(d, m, H - m, 1, -1); _corner(d, W - m, H - m, -1, -1)
 
     # top: logo mark + wordmark
@@ -88,7 +88,7 @@ def build_overlay(hook, caption, path):
 
     # hook (big teal), vertically centered around y=620
     if hook:
-        f_hook, hlines = _fit(d, hook, BOLD, 96, 960, 2)
+        f_hook, hlines = fit(d, hook, BOLD, 96, 960, 2)
         lh = f_hook.size * 1.12
         y = 620 - (len(hlines) * lh) / 2
         for ln in hlines:
@@ -98,7 +98,7 @@ def build_overlay(hook, caption, path):
 
     # caption (white) above footer, around y=1500
     if caption:
-        f_cap, clines = _fit(d, caption, REG, 50, 900, 3)
+        f_cap, clines = fit(d, caption, REG, 50, 900, 3)
         lh = f_cap.size * 1.25
         y = 1500 - (len(clines) * lh) / 2
         for ln in clines:
@@ -111,9 +111,10 @@ def build_overlay(hook, caption, path):
     d.rounded_rectangle([40, bar_top, 1040, 1900], radius=22, fill=GLASS)
     d.line([(62, bar_top + 2), (1018, bar_top + 2)], fill=TEAL, width=3)
     d.line([(W // 2 - 45, bar_top + 26), (W // 2 + 45, bar_top + 26)], fill=TEAL, width=3)
+
     f_foot = ImageFont.truetype(REG, 21)
     y = bar_top + 44
-    for ln in _wrap(d, FOOTER_TEXT, f_foot, 920):
+    for ln in wrap(d, FOOTER_TEXT, f_foot, 920):
         tw = d.textlength(ln, font=f_foot)
         d.text(((W - tw) / 2, y), ln, font=f_foot, fill=FOOTER)
         y += 28
@@ -127,16 +128,14 @@ def handler(event):
     if not veo or not voice:
         return {"error": "veo_url and voice_url are required"}
 
-    hook    = inp.get("hook", "")
+    hook = inp.get("hook", "")
     caption = inp.get("caption", "")
-    name    = inp.get("output_name") or f"glp_{uuid.uuid4().hex[:10]}.mp4"
-    mode    = inp.get("return_mode", "base64")
+    name = inp.get("output_name") or f"glp_{uuid.uuid4().hex[:10]}.mp4"
+    mode = inp.get("return_mode", "base64")
 
     work = tempfile.mkdtemp()
-    vp = os.path.join(work, "veo.mp4")
-    ap = os.path.join(work, "voice.mp3")
-    op = os.path.join(work, "overlay.png")
-    fp = os.path.join(work, name)
+    vp, ap = os.path.join(work, "veo.mp4"), os.path.join(work, "voice.mp3")
+    op, fp = os.path.join(work, "overlay.png"), os.path.join(work, name)
 
     try:
         _download(veo, vp)
@@ -149,8 +148,15 @@ def handler(event):
     except Exception as e:
         return {"error": f"overlay render failed: {e}"}
 
+    # Loop the Veo background (-stream_loop -1) and hold the overlay (-loop 1) so
+    # the output runs the FULL voiceover length. -shortest now ends at the finite
+    # audio stream, so the complete message always plays and the visual never
+    # dead-ends on a short (~8s) background clip.
     cmd = [
-        "ffmpeg", "-y", "-i", vp, "-i", op, "-i", ap,
+        "ffmpeg", "-y",
+        "-stream_loop", "-1", "-i", vp,
+        "-loop", "1", "-i", op,
+        "-i", ap,
         "-filter_complex",
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,setsar=1[bg];[1:v]scale=1080:1920[ov];"
@@ -159,6 +165,7 @@ def handler(event):
         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-shortest", fp,
     ]
+
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         return {"error": "ffmpeg failed", "stderr": proc.stderr[-2500:]}
@@ -176,27 +183,23 @@ def handler(event):
 
     if mode == "s3" or os.getenv("S3_BUCKET"):
         import boto3
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=os.getenv("S3_ENDPOINT") or None,
-            aws_access_key_id=os.getenv("S3_KEY"),
-            aws_secret_access_key=os.getenv("S3_SECRET"),
-            region_name=os.getenv("S3_REGION", "auto"),
-        )
+        s3 = boto3.client("s3", endpoint_url=os.getenv("S3_ENDPOINT") or None,
+                          aws_access_key_id=os.getenv("S3_KEY"),
+                          aws_secret_access_key=os.getenv("S3_SECRET"),
+                          region_name=os.getenv("S3_REGION", "auto"))
         key = f"{os.getenv('S3_PREFIX', 'glp/')}{name}"
         s3.upload_file(fp, os.getenv("S3_BUCKET"), key, ExtraArgs={"ContentType": "video/mp4"})
         base = os.getenv("S3_PUBLIC_BASE")
-        return {
-            "status": "ok", "output_name": name, "s3_key": key,
-            "output_url": f"{base.rstrip('/')}/{key}" if base else None,
-            "delivery": "s3",
-        }
+        return {"status": "ok", "output_name": name, "s3_key": key,
+                "output_url": f"{base.rstrip('/')}/{key}" if base else None, "delivery": "s3"}
 
-    # default: base64
+    # default: base64 (fine for short vertical clips; n8n decodes -> Drive + Blotato)
     if size > 18 * 1024 * 1024:
         return {"error": f"output {size} bytes too large for base64; use return_mode=put or S3"}
+
     with open(fp, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
+
     return {"status": "ok", "output_name": name, "bytes": size, "video_base64": b64}
 
 
