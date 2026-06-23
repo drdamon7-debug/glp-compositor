@@ -1,3 +1,10 @@
+import sys, traceback
+def _hook(et, ev, tb):
+      sys.stdout.write("STARTUP_CRASH: " + repr(ev) + "\n")
+      traceback.print_exception(et, ev, tb, file=sys.stdout)
+      sys.stdout.flush()
+  sys.excepthook = _hook
+
 """
 GLP BodyGuard — RunPod Serverless Compositor (Layers 3+4 in one call)
 Renders the branded transparent overlay (with this video's hook + caption) AND
