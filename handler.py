@@ -192,15 +192,27 @@ def handler(event):
         base = os.getenv("S3_PUBLIC_BASE")
         return {"status": "ok", "output_name": name, "s3_key": key,
                 "output_url": f"{base.rstrip('/')}/{key}" if base else None, "delivery": "s3"}
-
-    # default: base64 (fine for short vertical clips; n8n decodes -> Drive + Blotato)
-    if size > 18 * 1024 * 1024:
-        return {"error": f"output {size} bytes too large for base64; use return_mode=put or S3"}
-
-    with open(fp, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-
-    return {"status": "ok", "output_name": name, "bytes": size, "video_base64": b64}
+        # default: upload to Supabase Storage and return video_url
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        bucket = os.getenv("SUPABASE_BUCKET", "renders")
+        if not supabase_url or not supabase_key:
+                      return {"error": "SUPABASE_URL and SUPABASE_SERVICE_KEY env vars required"}
+                  upload_url = f"{supabase_url.rstrip('/')}/storage/v1/object/{bucket}/{name}"
+        with open(fp, "rb") as f:
+                      r = requests.put(
+                                        upload_url,
+                                        data=f,
+                                        headers={
+                                                              "Authorization": f"Bearer {supabase_key}",
+                                                              "Content-Type": "video/mp4",
+                                        },
+                                        timeout=600,
+)
+                  r.raise_for_status()
+        video_url = f"{supabase_url.rstrip('/')}/storage/v1/object/public/{bucket}/{name}"
+        return {"status": "ok", "output_name": name, "bytes": size, "video_url": video_url}
+  
 
 
 runpod.serverless.start({"handler": handler})
