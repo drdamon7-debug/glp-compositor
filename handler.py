@@ -1,24 +1,26 @@
-import sys, traceback, threading
+import sys, threading, traceback
 
-def _hook(et, ev, tb):
-    sys.stdout.write("STARTUP_CRASH: " + repr(ev) + "\n")
-    traceback.print_exception(et, ev, tb, file=sys.stdout)
+def _dump(prefix, exc, tb):
+    sys.stdout.write(prefix + ": " + repr(exc) + "\n")
+    traceback.print_exception(type(exc), exc, tb, file=sys.stdout)
     sys.stdout.flush()
 
-sys.excepthook = _hook
+sys.excepthook = lambda et, ev, tb: _dump("STARTUPCRASH", ev, tb)
+threading.excepthook = lambda a: _dump("THREADCRASH", a.exc_value, a.exc_traceback)
 
-def _thread_hook(args):
-    sys.stdout.write("THREAD_CRASH: " + repr(args.exc_value) + "\n")
-    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback, file=sys.stdout)
-    sys.stdout.flush()
+"""
+GLP BodyGuard — RunPod Serverless Compositor (faceless montage).
 
-threading.excepthook = _thread_hook
+Inputs: veo_url, voice_url, hook, caption, output_name.
+
+Builds matte-black/teal overlay (hook + caption + brand lockup), stitches Veo bg
++ overlay + HeyGen voice into 1080x1920, uploads to Supabase, returns video_url.
+"""
 
 import os
 import uuid
 import tempfile
 import subprocess
-import time
 import requests
 import runpod
 from PIL import Image, ImageDraw, ImageFont
@@ -29,13 +31,11 @@ TEAL = (22, 214, 198, 255)
 TEAL_SOFT = (22, 214, 198, 90)
 OBSIDIAN = (11, 11, 11)
 GLASS = (11, 11, 11, 150)
-
-FOOTER_TEXT = (
-    "GLP BodyGuard is an educational self-tracking tool developed by "
-    "R3 Integrated Health Plus LLC. It is not a medical device, does not "
-    "diagnose or treat any condition, and does not provide medical advice."
-)
-
+FOOTER = (203, 209, 214, 255)
+WHITE = (245, 245, 245, 255)
+FOOTER_TEXT = ("GLP BodyGuard is an educational self-tracking tool developed by "
+               "R3 Integrated Health Plus LLC. It is not a medical device, does not "
+               "diagnose or treat any condition, and does not provide medical advice.")
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 REG  = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -65,113 +65,140 @@ def wrap(draw, text, fnt, maxw):
     return out
 
 
-def build_overlay(duration_s, patient_name, drug_name, dose_str, week_label, out_path):
-    img = Image.new("RGBA", (W, H), (*OBSIDIAN, 255))
-    draw = ImageDraw.Draw(img, "RGBA")
+def fit(draw, text, path, start, maxw, max_lines, min_size=40):
+    size = start
+    while size >= min_size:
+        fnt = ImageFont.truetype(path, size)
+        lines = wrap(draw, text, fnt, maxw)
+        if len(lines) <= max_lines:
+            return fnt, lines
+        size -= 4
+    fnt = ImageFont.truetype(path, min_size)
+    return fnt, wrap(draw, text, fnt, maxw)
 
-    draw.rectangle([(0, 0), (8, H)], fill=TEAL)
 
-    draw.rectangle([(0, 0), (W, 160)], fill=GLASS)
+def _corner(d, x, y, dx, dy, ln=46, th=4):
+    d.line([(x, y), (x + dx * ln, y)], fill=TEAL, width=th)
+    d.line([(x, y), (x, y + dy * ln)], fill=TEAL, width=th)
+
+
+def build_overlay(hook, caption, path):
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    m = 40
+    _corner(d, m, m, 1, 1);    _corner(d, W - m, m, -1, 1)
+    _corner(d, m, H - m, 1, -1); _corner(d, W - m, H - m, -1, -1)
+
+    d.rounded_rectangle([54, 52, 98, 96], radius=12, fill=TEAL)
+    d.rounded_rectangle([62, 60, 90, 88], radius=8, outline=OBSIDIAN, width=3)
+    d.text((112, 56), "GLP BODYGUARD", font=ImageFont.truetype(BOLD, 34), fill=TEAL)
+
+    d.line([(54, SAFE), (W - 54, SAFE)], fill=TEAL_SOFT, width=1)
+
+    if hook:
+        f_hook, hlines = fit(d, hook, BOLD, 96, 960, 2)
+        lh = f_hook.size * 1.12
+        y = 620 - (len(hlines) * lh) / 2
+        for ln in hlines:
+            tw = d.textlength(ln, font=f_hook)
+            d.text(((W - tw) / 2, y), ln, font=f_hook, fill=TEAL)
+            y += lh
+
+    if caption:
+        f_cap, clines = fit(d, caption, REG, 50, 900, 3)
+        lh = f_cap.size * 1.25
+        y = 1500 - (len(clines) * lh) / 2
+        for ln in clines:
+            tw = d.textlength(ln, font=f_cap)
+            d.text(((W - tw) / 2, y), ln, font=f_cap, fill=WHITE)
+            y += lh
+
+    bar_top = 1762
+    d.rounded_rectangle([40, bar_top, 1040, 1900], radius=22, fill=GLASS)
+    d.line([(62, bar_top + 2), (1018, bar_top + 2)], fill=TEAL, width=3)
+    d.line([(W // 2 - 45, bar_top + 26), (W // 2 + 45, bar_top + 26)], fill=TEAL, width=3)
+
+    f_foot = ImageFont.truetype(REG, 21)
+    y = bar_top + 44
+    for ln in wrap(d, FOOTER_TEXT, f_foot, 920):
+        tw = d.textlength(ln, font=f_foot)
+        d.text(((W - tw) / 2, y), ln, font=f_foot, fill=FOOTER)
+        y += 28
+
+    img.save(path)
+
+
+def handler(event):
+    inp = event.get("input", {}) or {}
+    veo, voice = inp.get("veo_url"), inp.get("voice_url")
+
+    if not veo or not voice:
+        return {"error": "veo_url and voice_url are required"}
+
+    hook    = inp.get("hook", "")
+    caption = inp.get("caption", "")
+    name    = inp.get("output_name") or f"glp_{uuid.uuid4().hex[:10]}.mp4"
+
+    work = tempfile.mkdtemp()
+    vp, ap = os.path.join(work, "veo.mp4"), os.path.join(work, "voice.mp3")
+    op, fp = os.path.join(work, "overlay.png"), os.path.join(work, name)
+
     try:
-        fnt_h = ImageFont.truetype(BOLD, 48)
-    except Exception:
-        fnt_h = ImageFont.load_default()
-    draw.text((SAFE, 30), "GLP BodyGuard", font=fnt_h, fill=TEAL)
-    try:
-        fnt_sub = ImageFont.truetype(REG, 28)
-    except Exception:
-        fnt_sub = ImageFont.load_default()
-    draw.text((SAFE, 95), f"{drug_name}  |  {dose_str}  |  {week_label}", font=fnt_sub, fill=(200, 200, 200, 255))
+        _download(veo, vp)
+        _download(voice, ap)
+    except Exception as e:
+        return {"error": f"download failed: {e}"}
 
     try:
-        fnt_name = ImageFont.truetype(BOLD, 38)
-    except Exception:
-        fnt_name = ImageFont.load_default()
-    draw.text((SAFE, 190), patient_name, font=fnt_name, fill=(240, 240, 240, 255))
+        build_overlay(hook, caption, op)
+    except Exception as e:
+        return {"error": f"overlay render failed: {e}"}
 
-    draw.rectangle([(0, H - 140), (W, H)], fill=GLASS)
-    try:
-        fnt_foot = ImageFont.truetype(REG, 22)
-    except Exception:
-        fnt_foot = ImageFont.load_default()
-    lines = wrap(draw, FOOTER_TEXT, fnt_foot, W - 2 * SAFE)
-    y = H - 130
-    for line in lines:
-        draw.text((SAFE, y), line, font=fnt_foot, fill=(160, 160, 160, 255))
-        y += 30
+    cmd = [
+        "ffmpeg", "-y",
+        "-stream_loop", "-1", "-i", vp,
+        "-loop", "1",           "-i", op,
+        "-i", ap,
+        "-filter_complex",
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,setsar=1[bg];[1:v]scale=1080:1920[ov];"
+        "[bg][ov]overlay=0:0[v]",
+        "-map", "[v]", "-map", "2:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", fp,
+    ]
 
-    img.save(out_path, "PNG")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {"error": "ffmpeg failed", "stderr": proc.stderr[-2500:]}
 
+    size = os.path.getsize(fp)
 
-def upload_to_supabase(local_path):
-    base   = os.environ.get("SUPABASE_URL", "")
-    token  = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    bucket = os.environ.get("SUPABASE_BUCKET", "renders")
-    key    = f"glp_prod_{int(time.time())}.mp4"
-    with open(local_path, "rb") as f:
-        r = requests.post(
-            f"{base}/storage/v1/object/{bucket}/{key}",
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    bucket       = os.getenv("SUPABASE_BUCKET", "renders")
+
+    if not supabase_url or not supabase_key:
+        return {"error": "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set", "size_bytes": size}
+
+    upload_url = f"{supabase_url}/storage/v1/object/{bucket}/{name}"
+    with open(fp, "rb") as fh:
+        up = requests.post(
+            upload_url,
             headers={
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"Bearer {supabase_key}",
                 "Content-Type": "video/mp4",
                 "x-upsert": "true",
             },
-            data=f.read(),
-            timeout=120,
+            data=fh,
+            timeout=300,
         )
-    r.raise_for_status()
-    return f"{base}/storage/v1/object/public/{bucket}/{key}"
+    if up.status_code not in (200, 201):
+        return {"error": f"upload failed {up.status_code}", "body": up.text[:500]}
 
-
-def handler(job):
-    inp = job.get("input", {})
-
-    video_url  = inp.get("video_url", "")
-    audio_url  = inp.get("audio_url", "")
-    patient    = inp.get("patient_name", "Patient")
-    drug       = inp.get("drug_name", "Semaglutide")
-    dose       = inp.get("dose_str", "0.25 mg")
-    week       = inp.get("week_label", "Week 1")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        vid_path     = os.path.join(tmp, "input_video.mp4")
-        aud_path     = os.path.join(tmp, "input_audio.mp3")
-        overlay_path = os.path.join(tmp, "overlay.png")
-        final_path   = os.path.join(tmp, "final.mp4")
-
-        _download(video_url, vid_path)
-        _download(audio_url, aud_path)
-
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", vid_path],
-            capture_output=True, text=True, timeout=30
-        )
-        duration = float(probe.stdout.strip() or "60")
-
-        build_overlay(duration, patient, drug, dose, week, overlay_path)
-
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", vid_path,
-            "-i", aud_path,
-            "-i", overlay_path,
-            "-filter_complex",
-            "[0:v][2:v]overlay=0:0[v]",
-            "-map", "[v]",
-            "-map", "1:a",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
-            final_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            return {"error": "ffmpeg failed", "stderr": result.stderr[-2000:]}
-
-        video_url_out = upload_to_supabase(final_path)
-
-    return {"video_url": video_url_out}
+    video_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{name}"
+    return {"video_url": video_url, "size_bytes": size}
 
 
 runpod.serverless.start({"handler": handler})
